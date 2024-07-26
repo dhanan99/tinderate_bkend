@@ -1,7 +1,7 @@
 # curl -X GET "https://cm9tkdbh-8000.inc1.devtunnels.ms/" -H "accept: application/json"
 # curl -X GET "https://cm9tkdbh-8000.inc1.devtunnels.ms/users/me" -H "accept: application/json"
 # curl -X POST "https://cm9tkdbh-8000.inc1.devtunnels.ms/token" -H "accept: application/json" -H "Content-Type: application/x-www-form-urlencoded" -d "grant_type=&username=admin&password=admin&scope=&client_id=&client_secret="
-
+# curl -X POST "https://cm9tkdbh-8000.inc1.devtunnels.ms/send-confirmation-code?email=dhananjayhrssss%40gmail.com" -H "accept: application/json" -d ""
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Form
 from pydantic import BaseModel, EmailStr
 from typing import Optional
@@ -42,7 +42,8 @@ fake_users_db = {
 
 # Fake database to store confirmation codes
 confirmation_codes = {}
-
+class EmailSchema(BaseModel):
+    email: EmailStr
 class User(BaseModel):
     username: str
     email: Optional[str] = None
@@ -55,7 +56,7 @@ class UserInDB(User):
 def get_user(db, email: str):
     for user in db.values():
         if user['email'] == email:
-            return user
+            return UserInDB(**user)
     return None
 def save_user(db, user: User):
     db[user.username] = user.dict()
@@ -65,6 +66,7 @@ def verify_password(plain_password, hashed_password):
 
 def authenticate_user(fake_db, username: str, password: str):
     user = get_user(fake_db, username)
+    print(user.hashed_password)
     if not user:
         return False
     if not verify_password(password, user.hashed_password):
@@ -106,7 +108,7 @@ async def home():
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = authenticate_user(fake_users_db, form_data.username, form_data.password)
-    print(user)
+    # print(user)
     if not user:
         raise HTTPException(
             status_code=400,
@@ -123,7 +125,8 @@ async def read_users_me(token: str = Depends(oauth2_scheme)):
     return user
 
 @app.post("/send-confirmation-code")
-async def send_confirmation_code(email: EmailStr, background_tasks: BackgroundTasks):
+async def send_confirmation_code(email_data: EmailSchema, background_tasks: BackgroundTasks):
+    email = email_data.email
     confirmation_code = generate_confirmation_code()
     confirmation_codes[email] = confirmation_code
     subject = "Your Confirmation Code"
@@ -134,16 +137,33 @@ async def send_confirmation_code(email: EmailStr, background_tasks: BackgroundTa
 @app.post("/verify-confirmation-code")
 async def verify_confirmation_code(email: EmailStr = Form(...), confirmation_code: str = Form(...), password: str = Form(...)):
     user = get_user(fake_users_db, email)
-    print(fake_users_db)
     if user and confirmation_codes.get(email) == confirmation_code:
-        user['hashed_password'] = pwd_context.hash(password)  # Update the password
-        save_user(fake_users_db, User(**user))
+        user.hashed_password = pwd_context.hash(password)  # Update the password
+        save_user(fake_users_db, user)
         del confirmation_codes[email]  # Optionally delete the used code
         print(user)
         return {"message": "Confirmation code verified and password updated"}
     else:
         raise HTTPException(status_code=400, detail="Invalid confirmation code")
-    
+
+@app.post("/register")
+async def register_user(email: EmailStr = Form(...), username: str = Form(...), confirmation_code: str = Form(...), password: str = Form(...)):
+    if confirmation_codes.get(email) != confirmation_code:
+        raise HTTPException(status_code=400, detail="Invalid confirmation code")
+
+    if email in fake_users_db:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    hashed_password = pwd_context.hash(password)
+    new_user = {
+        "username": username,
+        "email": email,
+        "hashed_password": hashed_password
+    }
+    fake_users_db[username] = new_user
+    del confirmation_codes[email]  # Optionally delete the used code
+    print(fake_users_db)
+    return {"message": "User registered successfully"}    
 
 if __name__ == "__main__":
     import uvicorn
